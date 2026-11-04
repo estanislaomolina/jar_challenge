@@ -14,10 +14,11 @@ class ParametrosCosto:
     peso: float
 
     def __post_init__(self):
-        valores = (self.radio_inscripto_m, self.radio_circunscripto_m, self.margen_m,
-                   self.alcance_blando_m, self.peso)
-        if not all(math.isfinite(v) and v > 0 for v in valores):
-            raise ValueError('Parámetros de costo deben ser positivos y finitos')
+        positivos = (self.radio_inscripto_m, self.radio_circunscripto_m, self.peso)
+        no_negativos = (self.margen_m, self.alcance_blando_m)
+        if (not all(math.isfinite(v) and v > 0 for v in positivos)
+                or not all(math.isfinite(v) and v >= 0 for v in no_negativos)):
+            raise ValueError('Radios/peso positivos; margen/alcance no negativos y finitos')
         if self.radio_inscripto_m > self.radio_circunscripto_m:
             raise ValueError('El radio inscripto supera al circunscripto')
 
@@ -53,7 +54,8 @@ def mapa_costos(grilla, p, extra_ocupadas=None):
     ocupada = grilla.ocupada if extra_ocupadas is None else grilla.ocupada | extra_ocupadas
     distancia = distancia_a_ocupado(ocupada, grilla.resolucion)
     duro = p.radio_circunscripto_m + p.margen_m + grilla.resolucion / 2
-    costos = p.peso * np.clip(1.0 - (distancia - duro) / p.alcance_blando_m, 0.0, None)
+    costos = (p.peso * np.clip(1.0 - (distancia - duro) / p.alcance_blando_m, 0.0, None)
+              if p.alcance_blando_m > 0 else np.zeros_like(distancia))
     costos[distancia <= duro] = np.inf
     return costos, distancia
 

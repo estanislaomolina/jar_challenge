@@ -10,9 +10,9 @@ nodo_equipo:
     # true: calcula todo pero publica cero en /cmd_vel (primer paso en el robot real).
     prueba_en_seco: false
     # Envolvente física del X3: chasis y ruedas esféricas del URDF.
-    # Separado del margen de giro de M1 (0,10 m): navegación con frenado.
-    nav_margen_m: 0.02  # Candidato: reserva física extra de 2 cm.
-    nav_reserva_anticipacion_m: 0.0  # Sin anticipación extra; conserva frenado calculado.
+    # Márgenes adicionales nulos por instrucción de la organización.
+    nav_margen_m: 0.0
+    nav_reserva_anticipacion_m: 0.0
     nav_velocidad_escape_m_s: 0.05  # Cada opción vuelve a comprobar barrido y frenado.
     nav_huella_convexa: true
     nav_chasis_semi_ancho_m: 0.070
@@ -20,7 +20,7 @@ nodo_equipo:
     nav_rueda_y_m: 0.0845
     nav_rueda_radio_m: 0.033
     nav_rueda_semi_ancho_visual_m: 0.018
-    nav_alcance_blando_m: 0.40  # Preferir despeje sin prohibir pasos estrechos.
+    nav_alcance_blando_m: 0.0
     nav_peso_costo: 5.0
     nav_distancia_mira_m: 0.20
     nav_tolerancia_meta_m: 0.03

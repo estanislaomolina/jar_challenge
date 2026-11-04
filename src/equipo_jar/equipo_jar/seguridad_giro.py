@@ -6,7 +6,7 @@ def limites_barrido_giro(xmin, xmax, semi_ancho, angulo, margen):
     values=(xmin,xmax,semi_ancho,angulo,margen)
     if not all(math.isfinite(v) for v in values):
         raise ValueError('Geometría de giro no finita')
-    if not xmin < 0 < xmax or semi_ancho <= 0 or margen <= 0 or not 0 <= angulo <= 2*math.pi:
+    if not xmin < 0 < xmax or semi_ancho <= 0 or margen < 0 or not 0 <= angulo <= 2*math.pi:
         raise ValueError('Geometría de giro inválida')
 
     def extremos(a,b):

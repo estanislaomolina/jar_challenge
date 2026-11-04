@@ -117,7 +117,7 @@ def huella_desde_parametros(x_min, x_max, semi_ancho, margen):
     """Huella rectangular en base_footprint a partir de parámetros generales."""
     valores = (x_min, x_max, semi_ancho, margen)
     if not all(math.isfinite(v) for v in valores) or x_min >= x_max or semi_ancho <= 0 \
-            or margen <= 0:
+            or margen < 0:
         raise ValueError('Huella inválida')
     esquinas = [(x, y) for x in (x_min, x_max) for y in (-semi_ancho, semi_ancho)]
     return {'corners_base_m': esquinas,
@@ -243,7 +243,8 @@ def huella_convexa_x3(x_min,x_max,chasis_semi_ancho,rueda_x,rueda_y,rueda_radio,
     circunscriptos contienen los círculos completos, no una aproximación menor.
     """
     values=(x_min,x_max,chasis_semi_ancho,rueda_x,rueda_y,rueda_radio,margen,rueda_semi_ancho_visual)
-    if not all(math.isfinite(v) for v in values) or x_min>=x_max or min(values[2:])<=0:
+    if (not all(math.isfinite(v) for v in values) or x_min>=x_max or margen<0
+            or min(chasis_semi_ancho,rueda_x,rueda_y,rueda_radio,rueda_semi_ancho_visual)<=0):
         raise ValueError('Geometría convexa inválida')
     points=[(x,y) for x in (x_min,x_max) for y in (-chasis_semi_ancho,chasis_semi_ancho)]
     radius=rueda_radio/math.cos(math.pi/32)

@@ -107,7 +107,8 @@ def _planificar_en_grilla(grilla,ocupada,inicio,meta,huella,plazo_s=2.0,diagnost
         distancia=distance_transform_edt(np.pad(~ocupada,1,constant_values=False))[1:-1,1:-1]*res
         p=parametros_costos
         duro=p.radio_circunscripto_m+p.margen_m+res/2
-        preferencia+=p.peso*np.maximum(0.,1.-(distancia-duro)/p.alcance_blando_m)
+        if p.alcance_blando_m > 0:
+            preferencia+=p.peso*np.maximum(0.,1.-(distancia-duro)/p.alcance_blando_m)
 
     start=grilla.a_celda(inicio.x,inicio.y);goal=grilla.a_celda(*meta)
     if start is None or goal is None:return resultado(None,'Fuera del mapa')

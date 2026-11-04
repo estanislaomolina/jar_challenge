@@ -138,7 +138,7 @@ class NodoEquipo(Node):
         self.pub_reinicio_local = self.create_publisher(
             PoseWithCovarianceStamped, '/equipo/initialpose', 10)
         if (not math.isfinite(self.valor('reserva_detencion_giro_rad'))
-                or self.valor('reserva_detencion_giro_rad') <= 0):
+                or self.valor('reserva_detencion_giro_rad') < 0):
             raise ValueError('Reserva angular de detención inválida')
         # Validar antes del mapa: una configuración geométrica inválida no mueve.
         comprobar_giro([],self.valor('huella_x_min_m'),self.valor('huella_x_max_m'),
