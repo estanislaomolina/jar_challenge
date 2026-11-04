@@ -582,7 +582,10 @@ class NodoEquipo(Node):
             if abs(odom_s-tf_s) > self.valor('frescura_sensores_s'):
                 self.diagnostico_observacion['nav_tf_error'] = 'TF de odometría fuera de vigencia'
                 return None
-            correccion = self.tf_buffer.lookup_transform('map', 'odom', Time()).transform
+            tf_correccion = self.tf_buffer.lookup_transform(
+                'map', 'odom', Time.from_msg(movimiento.header.stamp))
+            correccion = tf_correccion.transform
+            self.diagnostico_observacion['nav_tf_control_stamp_s'] = tf_s
             t = movimiento.transform
             giro = yaw(correccion.rotation)
             c, s = math.cos(giro), math.sin(giro)
@@ -590,14 +593,32 @@ class NodoEquipo(Node):
                           correccion.translation.y + s*t.translation.x + c*t.translation.y,
                           math.atan2(math.sin(giro+yaw(t.rotation)),
                                      math.cos(giro+yaw(t.rotation))))
+            if not all(math.isfinite(v) for v in (pose.x,pose.y,pose.yaw)):
+                self.diagnostico_observacion['nav_tf_error'] = 'Pose de control no finita'
+                return None
+            anterior = getattr(self, '_correccion_nav_previa', None)
+            actual = (correccion.translation.x,correccion.translation.y,giro)
+            if anterior is not None:
+                self._nav_salto_m = max(getattr(self,'_nav_salto_m',0.),math.dist(actual[:2],anterior[:2]))
+                delta = abs(math.atan2(math.sin(giro-anterior[2]),math.cos(giro-anterior[2])))
+                self._nav_salto_rad = max(getattr(self,'_nav_salto_rad',0.),delta)
+            self._correccion_nav_previa = actual
             for scan, recibido in reversed(self.historial_scan):
                 if ahora-recibido > self.valor('frescura_sensores_s'):
+                    continue
+                scan_s = scan.header.stamp.sec+scan.header.stamp.nanosec/1e9
+                edad_captura = tf_s-scan_s
+                self.diagnostico_observacion['nav_edad_captura_scan_s'] = edad_captura
+                if edad_captura < -.05 or edad_captura > self.valor('frescura_sensores_s'):
                     continue
                 try:
                     laser = self.tf_buffer.lookup_transform_full(
                         'base_footprint', Time.from_msg(movimiento.header.stamp),
                         scan.header.frame_id, Time.from_msg(scan.header.stamp), 'odom').transform
                 except TransformException:
+                    continue
+                if not all(math.isfinite(v) for v in (laser.translation.x,laser.translation.y,yaw(laser.rotation))):
+                    self.diagnostico_observacion['nav_tf_error'] = 'TF de laser no finita'
                     continue
                 puntos = puntos_desde_scan(
                     scan.ranges, scan.angle_min, scan.angle_increment,
@@ -643,6 +664,21 @@ class NodoEquipo(Node):
             ciclo_p95_ms=1000 * duraciones[int(0.95 * (len(duraciones) - 1))]
             if duraciones else None)
         self.pub_navegacion.publish(String(data=json.dumps(estado)))
+        ahora = time.monotonic()
+        if ahora-getattr(self,'_t_log_nav',-math.inf) >= 2.0:
+            self._t_log_nav = ahora
+            guardia = estado.get('guardia') or {}
+            resumen = {k:estado.get(k) for k in ('estado','motivo','pose_control',
+                'ultima_propuesta','restante_m','replanificaciones','replanificaciones_capa',
+                'obstaculos_recordados','banda_yaw_rad','planificacion_pendiente')}
+            resumen['comando_publicado'] = getattr(self,'_ultimo_cmd_publicado',None)
+            resumen['guardia'] = {k:guardia.get(k) for k in ('bloqueado','motivo','escala',
+                'escala_angular','holgura_minima_m','recuperacion_margen','esperando_frenado')}
+            resumen['edad_captura_scan_s'] = self.diagnostico_observacion.get('nav_edad_captura_scan_s')
+            resumen['salto_correccion_max_m'] = getattr(self,'_nav_salto_m',0.)
+            resumen['salto_correccion_max_rad'] = getattr(self,'_nav_salto_rad',0.)
+            self.get_logger().info('Navegación: '+json.dumps(resumen))
+            self._nav_salto_m = self._nav_salto_rad = 0.
 
     def ciclo_de_control(self):
         if self.mapa is None:
@@ -682,6 +718,7 @@ class NodoEquipo(Node):
         if self.valor('prueba_en_seco'):
             self.pub_propuesto.publish(cmd)
             cmd = Twist()
+        self._ultimo_cmd_publicado = [cmd.linear.x,cmd.linear.y,cmd.angular.z]
         self.pub_cmd_vel.publish(cmd)
         if self.mision is not None and self.mision.finalizar and not self.mision.done:
             p = self.navegacion.ultima_pose

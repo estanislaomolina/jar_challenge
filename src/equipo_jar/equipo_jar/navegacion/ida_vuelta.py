@@ -114,6 +114,8 @@ class IdaVuelta:
         self.t_replan_capa = -math.inf
         self.replan_tras_escape = False
         self.replanificaciones_capa = 0
+        self._capa_planificada = np.zeros_like(self.grilla.ocupada)
+        self._capa_solicitada = None
 
     def invalidar_plan_por_localizacion(self):
         """Descarta también resultados pendientes calculados en la pose anterior."""
@@ -334,6 +336,8 @@ class IdaVuelta:
             self.ancla_progreso = None
             self._fase_progreso = fase
         self.ruta=ruta
+        self._capa_planificada = (self._capa_solicitada.copy() if self._capa_solicitada is not None
+                                 else self.capa.ocupadas(self.ahora).copy())
         seguidor=self.seguidor_ida if fase=='YENDO' else self.seguidor_vuelta
         rumbo = self.largada[2] if self.p.regreso_automatico else self.yaw_trayecto
         if (not self.p.regreso_automatico and fase == 'YENDO'
@@ -350,7 +354,8 @@ class IdaVuelta:
     def _planificar(self,pose,fase):
         self.yaw_trayecto = pose.yaw
         destino=self.meta if fase=='YENDO' else self.largada[:2]
-        args=(pose,fase,self.capa.ocupadas(self.ahora).copy(),destino,self.largada,self.estado=='BLOQUEADO',dict(self.huella_operativa),
+        self._capa_solicitada = self.capa.ocupadas(self.ahora).copy()
+        args=(pose,fase,self._capa_solicitada.copy(),destino,self.largada,self.estado=='BLOQUEADO',dict(self.huella_operativa),
               self.meta_yaw if fase=='YENDO' else None)
         if self.executor_plan is None:
             return self._aplicar_plan(self._calcular_plan(*args),fase)
@@ -481,9 +486,20 @@ class IdaVuelta:
         r = max(1, math.ceil(radio / g.resolucion))
         dy, dx = np.mgrid[-r:r+1, -r:r+1]
         disco = np.hypot(dy, dx) * g.resolucion <= radio
-        cercano = min(range(len(puntos)), key=lambda i: math.dist(puntos[i], (pose.x, pose.y)))
+        # Usar el tramo que sigue el controlador, no el vértice más cercano:
+        # en la segunda mitad de un segmento ese vértice es el final y lo salta.
+        seguidor = self.seguidor
+        indice = (max(0, seguidor.indice_orientado-1) if self.ruta.orientaciones is not None
+                  else seguidor.segmento)
+        indice = max(0,min(indice,len(puntos)-2))
+        a,b = puntos[indice],puntos[indice+1]
+        dx,dy = b[0]-a[0],b[1]-a[1]
+        largo2 = dx*dx+dy*dy
+        f = max(0.,min(1.,((pose.x-a[0])*dx+(pose.y-a[1])*dy)/largo2)) if largo2 else 0.
+        inicio = (a[0]+f*dx,a[1]+f*dy)
+        proximos = [inicio]+puntos[indice+1:]
         recorrido = 0.0
-        for a, b in zip(puntos[cercano:], puntos[cercano+1:]):
+        for a, b in zip(proximos, proximos[1:]):
             largo = math.dist(a, b)
             n = max(1, math.ceil(largo / g.resolucion))
             for k in range(n + 1):
@@ -517,9 +533,10 @@ class IdaVuelta:
         fase = self._fase()
         if self.ruta is None:
             return self._bloqueado(e,fase)
+        nuevas = self.capa.ocupadas(e.ahora) & ~self._capa_planificada
         if (e.ahora - self.t_replan_capa >= 1.5 and self.plan_pendiente is None
                 and self.t_recuperacion_margen is None
-                and self._ruta_invadida(e.pose, self.capa.ocupadas(e.ahora))):
+                and self._ruta_invadida(e.pose, nuevas)):
             return self._replanificar_por_capa(e, fase)
         celda = self.grilla.a_celda(e.pose.x, e.pose.y)
         espacio = float(self.distancia[celda]) if celda is not None else 0.0
