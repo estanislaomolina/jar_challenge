@@ -137,8 +137,11 @@ def puntos_desde_scan(rangos, angulo_min, incremento, rango_min, rango_max, tf_l
 
 
 def limitar_velocidad(puntos_base, vx, vy, huella, desaceleracion, latencia_s,
-                      escalas=(1.0, 0.75, 0.5, 0.25, 0.1), wz=0., desaceleracion_angular=.5):
+                      escalas=(1.0, 0.75, 0.5, 0.25, 0.1), wz=0., desaceleracion_angular=.5,
+                      reserva_anticipacion_m=STOPPING_RESERVE_M):
     """Mayor escala del comando cuyo barrido de frenado queda libre; si no, cero."""
+    if not math.isfinite(reserva_anticipacion_m) or reserva_anticipacion_m < 0:
+        return 0.,0.,{'bloqueado':True,'escala':0.,'escala_angular':0.,'motivo':'Reserva inválida'}
     rapidez = math.hypot(vx, vy)
     if rapidez < 1e-3 and abs(wz)<1e-3:
         return 0.0, 0.0, {'bloqueado': False, 'escala': 0.0}
@@ -154,7 +157,7 @@ def limitar_velocidad(puntos_base, vx, vy, huella, desaceleracion, latencia_s,
         w=escala*wz
         giro=abs(w)*latencia_s+w*w/(2*desaceleracion_angular)
         distancia = v * v / (2 * desaceleracion) + v * latencia_s
-        if rapidez>=1e-3:distancia+=min(STOPPING_RESERVE_M,v*STOPPING_PREVIEW_S)
+        if rapidez>=1e-3:distancia+=min(reserva_anticipacion_m,v*STOPPING_PREVIEW_S)
         curvatura=distancia*min(1.,giro)
         ampliada=dict(huella,heading_uncertainty_rad=huella.get('heading_uncertainty_rad',2*MAX_HEADING_ERROR_RAD)+giro,
                       margin_m=huella['margin_m']+curvatura)
@@ -168,7 +171,8 @@ def limitar_velocidad(puntos_base, vx, vy, huella, desaceleracion, latencia_s,
                        'bloqueantes_base_m':guardia.get('blocking_points_base_and_along_cross_m',[])[:3]}
 
 
-def recuperar_margen(puntos_base, huella, desaceleracion, latencia_s):
+def recuperar_margen(puntos_base, huella, desaceleracion, latencia_s,
+                     direccion_preferida=None, velocidad_max=.01):
     """Escapar de una pequeña intrusión del buffer sin acercarse al contacto.
 
     No habilita ruta ni cambia el margen nominal. Exige conservar durante
@@ -178,6 +182,8 @@ def recuperar_margen(puntos_base, huella, desaceleracion, latencia_s):
     """
     if not puntos_validos(puntos_base) or not math.isfinite(desaceleracion) or desaceleracion<=0 \
             or not math.isfinite(latencia_s) or latencia_s<0:
+        return None
+    if not math.isfinite(velocidad_max) or not 0 < velocidad_max <= .1:
         return None
     points=np.asarray(puntos_base,dtype=float)
     hull,error=poligono_barrido(huella,0.,0.)
@@ -200,8 +206,16 @@ def recuperar_margen(puntos_base, huella, desaceleracion, latencia_s):
         return None
     alpha=math.atan2(away[1],away[0]);best=None
     hard=dict(huella,margin_m=before-1e-6)
-    for angle in (alpha,alpha-math.pi/4,alpha+math.pi/4):
-        for speed in (.01,.005):
+    angles = [alpha, alpha-math.pi/4, alpha+math.pi/4]
+    preferida = None
+    if direccion_preferida is not None:
+        v = np.asarray(direccion_preferida,dtype=float)
+        if v.shape == (2,) and np.isfinite(v).all() and np.linalg.norm(v) > 1e-6:
+            preferida = v / np.linalg.norm(v)
+            angles.extend(k*math.pi/8 for k in range(16))
+    mejor_puntaje = None
+    for angle in angles:
+        for speed in (velocidad_max, velocidad_max/2):
             distance=speed+speed*latencia_s+speed*speed/(2*desaceleracion)
             direction=np.array([math.cos(angle),math.sin(angle)])
             after=float(distancias_poligono(points-distance*direction,hull).min())-error
@@ -210,7 +224,10 @@ def recuperar_margen(puntos_base, huella, desaceleracion, latencia_s):
             sweep=comprobar_barrido(points,angle,distance,hard)
             if not sweep['clear']:
                 continue
-            if best is None or after>best[2]['separacion_final_m']:
+            progreso = float(direction @ preferida) if preferida is not None else 0.0
+            puntaje = (progreso,after)
+            if mejor_puntaje is None or puntaje > mejor_puntaje:
+                mejor_puntaje = puntaje
                 best=(speed*direction[0],speed*direction[1],dict(
                     bloqueado=False,recuperacion_margen=True,separacion_inicial_m=before,
                     separacion_final_m=after,margen_nominal_m=margin,

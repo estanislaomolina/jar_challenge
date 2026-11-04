@@ -47,6 +47,24 @@ class ParametrosIdaVuelta:
     desaceleracion_angular: float = 0.5
     regreso_automatico: bool = True
     tolerancia_yaw_meta_rad: float = 0.06
+    reserva_anticipacion_m: float = 0.10
+    velocidad_escape_m_s: float = 0.01
+    guardia_activa: bool = True
+    rodeo_sin_veto: bool = False
+    plazo_rodeo_sin_veto_s: float = 8.0
+
+    def __post_init__(self):
+        if type(self.rodeo_sin_veto) is not bool:
+            raise ValueError('rodeo_sin_veto debe ser booleano')
+        if not math.isfinite(self.plazo_rodeo_sin_veto_s) or self.plazo_rodeo_sin_veto_s <= 0:
+            raise ValueError('Plazo de rodeo inválido')
+        if type(self.guardia_activa) is not bool:
+            raise ValueError('guardia_activa debe ser booleano')
+        if not math.isfinite(self.reserva_anticipacion_m) or self.reserva_anticipacion_m < 0:
+            raise ValueError('Reserva de anticipación inválida')
+        if not math.isfinite(self.velocidad_escape_m_s) or not 0 < self.velocidad_escape_m_s <= .1:
+            raise ValueError('Velocidad de escape inválida')
+
 
 
 def _resolver_plan(grilla,costos,p_costos,pose,fase,extra,destino,largada,replan,huella,rumbo_meta=None):
@@ -74,6 +92,7 @@ class IdaVuelta:
     def __init__(self, grilla, p_costos, p_seguimiento, huella, p):
         self.grilla, self.p_costos, self.huella, self.p = grilla, p_costos, huella, p
         self.huella_operativa=dict(huella)
+        self.huella_guardia=dict(huella,heading_uncertainty_rad=0.0)
         self.costos, self.distancia = mapa_costos(grilla, p_costos)
         self.capa = CapaViva(grilla, self.distancia, p.vida_obstaculo_s, p.tolerancia_mapa_m)
         # No exigir precisión inferior a la diagonal de una celda del mapa.
@@ -109,6 +128,10 @@ class IdaVuelta:
         self.yaw_trayecto = None
         self.solicitud_regreso = False
         self.largada_fijada = False
+        self.rodeo_sin_veto = False
+        self._solicitud_rodeo = False
+        self._rodeo_ruta = None
+        self._rodeo_hasta = -math.inf
         # Competencia 2026-11-04: obstáculo fuera del mapa en la ruta. Replanificar
         # al verlo (capa viva) y tras un escape, en vez de insistir con la ruta vieja.
         self.t_replan_capa = -math.inf
@@ -117,9 +140,37 @@ class IdaVuelta:
         self._capa_planificada = np.zeros_like(self.grilla.ocupada)
         self._capa_solicitada = None
 
+    @property
+    def guardia_activa_efectiva(self):
+        return self.p.guardia_activa and not self.rodeo_sin_veto
+
+
+    def _reactivar_guardia(self):
+        self.rodeo_sin_veto = False
+        self._solicitud_rodeo = False
+        self._rodeo_ruta = None
+        self._rodeo_hasta = -math.inf
+
+
+    def _rodeo_pendiente(self,e,fase):
+        """No ejecutar un plan invadido mientras se obtiene una alternativa."""
+        self._reactivar_guardia()
+        self._solicitud_rodeo = True
+        self.ultima_pose = e.pose
+        self.ahora = e.ahora
+        self.seguidor.detener()
+        self.ultima_guardia = dict(self.ultima_guardia,
+            solo_diagnostico=False,esperando_rodeo=True)
+        if (self.plan_pendiente is None and e.ahora-self.t_replan_capa >= 1.5):
+            return self._replanificar_por_capa(e,fase)
+        self.motivo = 'Obstáculo detectado: esperando ruta de rodeo'
+        return Comando.cero()
+
+
     def invalidar_plan_por_localizacion(self):
         """Descarta también resultados pendientes calculados en la pose anterior."""
         if self.estado in TERMINALES:return
+        self._reactivar_guardia()
         if self.ruta is not None:self.seguidor.detener()
         if self.plan_pendiente is not None:
             self.plan_pendiente[0].cancel()
@@ -149,6 +200,7 @@ class IdaVuelta:
             self.plan_pendiente[0].cancel()
             self.plan_pendiente = None
         self.meta = tuple(float(v) for v in xy)
+        self._reactivar_guardia()
         self.meta_yaw = rumbo
         self.ruta = None
         self.t_recuperacion_margen=None
@@ -186,6 +238,7 @@ class IdaVuelta:
             self.plan_pendiente = None
         self.ruta = None
         self.solicitud_regreso = True
+        self._reactivar_guardia()
         self.estado = 'ESPERANDO_REGRESO'
         self.previo = None
         self.replanificaciones = 0
@@ -201,8 +254,10 @@ class IdaVuelta:
         return self.previo if self.estado in ('BLOQUEADO', 'DETENIDO') else self.estado
 
     def _fallar(self, motivo):
+        self._reactivar_guardia()
         self.estado, self.motivo = 'FALLO', motivo
         return Comando.cero()
+
 
     def habilitar_planificacion_asincrona(self):
         self.executor_plan=ProcessPoolExecutor(max_workers=1,
@@ -315,6 +370,7 @@ class IdaVuelta:
         return not np.any(distancias_poligono(projected[cerca],hull)<=margen)
 
     def _aplicar_plan(self,result,fase):
+        self.rodeo_sin_veto = False
         ruta,regreso=result[:2]
         if len(result)>2:self.diagnostico_plan=result[2]
         if ruta is None and fase=='VOLVIENDO':
@@ -349,6 +405,14 @@ class IdaVuelta:
                 rumbo = self.meta_yaw
         seguidor.reiniciar(ruta, rumbo)
         self.regreso_estimado_m=regreso
+        if (self._solicitud_rodeo and self.p.rodeo_sin_veto
+                and self.ultima_pose is not None
+                and not self._ruta_invadida(self.ultima_pose,
+                    self.capa.ocupadas(self.ahora),alcance_m=math.inf,ignorar_m=0.)):
+            self.rodeo_sin_veto = True
+            self._rodeo_ruta = self.ruta
+            self._rodeo_hasta = self.ahora+self.p.plazo_rodeo_sin_veto_s
+        self._solicitud_rodeo = False
         return True
 
     def _planificar(self,pose,fase):
@@ -388,6 +452,8 @@ class IdaVuelta:
         return cmd
 
     def paso(self, e):
+        if not (e.lista and e.pose is not None and e.puntos_base is not None):
+            self._reactivar_guardia()
         self.ahora = e.ahora
         self.ultima_pose=e.pose
         if self.solicitud_regreso:
@@ -529,11 +595,17 @@ class IdaVuelta:
         return self._bloqueado(e, fase)
 
     def _avanzar(self, e):
+        if (self.rodeo_sin_veto and (e.ahora >= self._rodeo_hasta
+                or self.ruta is not self._rodeo_ruta)):
+            self._reactivar_guardia()
         self._registrar_traza(e.pose)
         fase = self._fase()
         if self.ruta is None:
             return self._bloqueado(e,fase)
         nuevas = self.capa.ocupadas(e.ahora) & ~self._capa_planificada
+        if ((self.p.rodeo_sin_veto or not self.p.guardia_activa) and
+                self._ruta_invadida(e.pose,nuevas,ignorar_m=0.)):
+            return self._rodeo_pendiente(e,fase)
         if (e.ahora - self.t_replan_capa >= 1.5 and self.plan_pendiente is None
                 and self.t_recuperacion_margen is None
                 and self._ruta_invadida(e.pose, nuevas)):
@@ -546,33 +618,54 @@ class IdaVuelta:
             # efectivo por el espacio en la dirección real del movimiento.
             espacio = self.seguidor.p.espacio_rapido_m
         cmd = self.seguidor.paso(e.ahora, e.pose, espacio)
-        if getattr(self.seguidor, "atascado", False):
-            return self._fallar("Alineación sin convergencia: abandonar intento")
+        if getattr(self.seguidor,'atascado',False):
+            return self._fallar('Alineación sin convergencia: abandonar intento')
         self.ultima_propuesta=[cmd.vx,cmd.vy,cmd.wz]
         if self.seguidor.llego:
             error = (math.atan2(math.sin(self.meta_yaw-e.pose.yaw),
                                math.cos(self.meta_yaw-e.pose.yaw))
                      if fase == 'YENDO' and self.meta_yaw is not None else 0.)
             if abs(error) <= self.p.tolerancia_yaw_meta_rad:
+                self._reactivar_guardia()
                 self.previo = None
                 if fase == 'YENDO':
                     self.estado, self.t_en_meta = 'EN_META', e.ahora
                 else:
                     self.estado = 'EN_LARGADA'
                 return Comando.cero()
-            cmd = self.seguidor.alinear(e.ahora, error)
-        # No elevar nunca un comando después de comprobar el barrido.
-        escalas = (1., .75, .5, .25, .1)
+            cmd = self.seguidor.alinear(e.ahora,error)
+        escalas = (1.,.75,.5,.25,.1)
         p = self.seguidor.p
-        if math.hypot(cmd.vx,cmd.vy) < 1e-3 and abs(cmd.wz) >= 1e-3:
+        if math.hypot(cmd.vx,cmd.vy)<1e-3 and abs(cmd.wz)>=1e-3:
             w = math.copysign(min(p.velocidad_angular_max,
-                                  max(abs(cmd.wz),p.velocidad_angular_min)),cmd.wz)
+                max(abs(cmd.wz),p.velocidad_angular_min)),cmd.wz)
             cmd = type(cmd)(0.,0.,w)
-            escalas = tuple(s for s in escalas if abs(w)*s+1e-12 >= p.velocidad_angular_min)
-        vx, vy, diag = limitar_velocidad(e.puntos_base, cmd.vx, cmd.vy, self.huella_operativa,
+            escalas = tuple(v for v in escalas if abs(w)*v+1e-12>=p.velocidad_angular_min)
+        vx, vy, diag = limitar_velocidad(e.puntos_base, cmd.vx, cmd.vy, self.huella_guardia,
                                          self.p.desaceleracion, self.p.latencia_s,
-                                         escalas=escalas, wz=cmd.wz,
-                                         desaceleracion_angular=self.p.desaceleracion_angular)
+                                         escalas=escalas,wz=cmd.wz,desaceleracion_angular=self.p.desaceleracion_angular,
+                                         reserva_anticipacion_m=self.p.reserva_anticipacion_m)
+        if (self.guardia_activa_efectiva and self.p.rodeo_sin_veto
+                and diag['bloqueado']):
+            c,s = math.cos(e.pose.yaw),math.sin(e.pose.yaw)
+            puntos = [(e.pose.x+c*p[0]-s*p[1],e.pose.y+s*p[0]+c*p[1])
+                      for p in diag.get('bloqueantes_base_m',[])]
+            self.capa.registrar_bloqueo(e.ahora,puntos)
+            return self._rodeo_pendiente(e,fase)
+        if not self.guardia_activa_efectiva:
+            self.ultima_guardia=dict(diag,solo_diagnostico=True,
+                                    comando_sin_guardia=True)
+            self.t_recuperacion_margen=None
+            # Conservar los puntos reales que reveló la comprobación, incluso
+            # si el filtro de paredes no los incorporó a la capa viva.
+            if diag['bloqueado']:
+                c,s = math.cos(e.pose.yaw),math.sin(e.pose.yaw)
+                puntos = [(e.pose.x+c*p[0]-s*p[1],e.pose.y+s*p[0]+c*p[1])
+                          for p in diag.get('bloqueantes_base_m',[])]
+                self.capa.registrar_bloqueo(e.ahora,puntos)
+            if self._ruta_invadida(e.pose,self.capa.ocupadas(e.ahora),ignorar_m=0.):
+                return self._rodeo_pendiente(e,fase)
+            return cmd
         stamp=e.estampa_scan
         scan_s=(stamp[0]+stamp[1]*1e-9 if isinstance(stamp,(tuple,list))
                 and len(stamp)==2 else None)
@@ -581,8 +674,11 @@ class IdaVuelta:
              0. <= scan_s-self.estampa_inicio_recuperacion <= 5. and
              e.ahora-self.t_recuperacion_margen <= self.p.plazo_detenido_s))
         if diag['bloqueado'] and recuperacion_vigente:
-            escape=recuperar_margen(e.puntos_base,self.huella_operativa,
-                                   self.p.desaceleracion,self.p.latencia_s)
+            escape=recuperar_margen(e.puntos_base,self.huella_guardia,
+                                   self.p.desaceleracion,self.p.latencia_s,
+                                   direccion_preferida=(cmd.vx,cmd.vy),
+                                   velocidad_max=min(self.p.velocidad_escape_m_s,
+                                                     self.seguidor.p.velocidad_max))
             if escape is not None:
                 # Frenar primero: medir la espera con estampas de scan,
                 # no reloj de pared (Gazebo puede correr más lento).
@@ -629,6 +725,7 @@ class IdaVuelta:
         self.seguidor.detener()
         return self._bloqueado(e, fase)
 
+
     def _bloqueado(self, e, fase):
         if self.estado != 'BLOQUEADO':
             self.previo, self.estado = fase, 'BLOQUEADO'
@@ -666,12 +763,17 @@ class IdaVuelta:
             'pose_control':([self.ultima_pose.x,self.ultima_pose.y,self.ultima_pose.yaw]
                 if self.ultima_pose is not None else None),
             'guardia':self.ultima_guardia,
+            'guardia_activa':self.p.guardia_activa,
+            'guardia_activa_efectiva':self.guardia_activa_efectiva,
+            'rodeo_sin_veto':self.rodeo_sin_veto,
+            'rodeo_sin_veto_hasta':self._rodeo_hasta if self.rodeo_sin_veto else None,
             'ultima_propuesta':self.ultima_propuesta,
             'margen_huella_m':self.huella['margin_m'],
             'radio_huella_m':self.huella['radius_m'],
             'vertices_huella_m':self.huella['corners_base_m'],
             'obstaculos_recordados':int(self.capa.ocupadas(self.ahora).sum()),
             'banda_yaw_rad':self.huella_operativa.get('heading_uncertainty_rad',2*MAX_HEADING_ERROR_RAD),
+            'banda_yaw_guardia_rad':self.huella_guardia['heading_uncertainty_rad'],
             'diagnostico_plan':self.diagnostico_plan,
             'planificador':('SE2' if self.ruta and self.ruta.orientaciones is not None else 'XY'),
             'rumbos_ruta':self.ruta.orientaciones if self.ruta else None,

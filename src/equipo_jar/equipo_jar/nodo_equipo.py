@@ -94,6 +94,9 @@ class NodoEquipo(Node):
             'nav_desaceleracion_angular': 0.5,
             'nav_vida_obstaculo_s': 600.0,
             'nav_margen_m': .04, 'nav_huella_convexa': True, 'nav_chasis_semi_ancho_m': .070,
+            'nav_reserva_anticipacion_m': .10, 'nav_velocidad_escape_m_s': .01,
+            'nav_guardia_activa': True,
+            'nav_rodeo_sin_veto': False, 'nav_plazo_rodeo_sin_veto_s': 8.0,
             'nav_rueda_x_m': .080, 'nav_rueda_y_m': .0845, 'nav_rueda_radio_m': .033,
             'nav_rueda_semi_ancho_visual_m': .018,
             'meta_distancia_min_m': 1.5, 'meta_distancia_max_m': 3.0,
@@ -500,7 +503,12 @@ class NodoEquipo(Node):
             v('nav_pausa_en_meta_s'), v('nav_tolerancia_largada_m'), v('nav_desaceleracion'),
             v('nav_latencia_s'), v('nav_vida_obstaculo_s'), v('tolerancia_mapa_m'),
             v('nav_desaceleracion_angular'),
-            regreso_automatico=v('modo_navegacion') != 'mision')
+            regreso_automatico=v('modo_navegacion') != 'mision',
+            reserva_anticipacion_m=v('nav_reserva_anticipacion_m'),
+            velocidad_escape_m_s=v('nav_velocidad_escape_m_s'),
+            guardia_activa=v('nav_guardia_activa'),
+            rodeo_sin_veto=v('nav_rodeo_sin_veto'),
+            plazo_rodeo_sin_veto_s=v('nav_plazo_rodeo_sin_veto_s'))
         self.navegacion = IdaVuelta(grilla, costos, seguimiento, self.huella, ida_vuelta)
         self.navegacion.habilitar_planificacion_asincrona()
         if v('modo_navegacion') == 'mision':
@@ -670,10 +678,12 @@ class NodoEquipo(Node):
             guardia = estado.get('guardia') or {}
             resumen = {k:estado.get(k) for k in ('estado','motivo','pose_control',
                 'ultima_propuesta','restante_m','replanificaciones','replanificaciones_capa',
-                'obstaculos_recordados','banda_yaw_rad','planificacion_pendiente')}
+                'obstaculos_recordados','banda_yaw_rad','planificacion_pendiente',
+                'guardia_activa','guardia_activa_efectiva','rodeo_sin_veto')}
             resumen['comando_publicado'] = getattr(self,'_ultimo_cmd_publicado',None)
             resumen['guardia'] = {k:guardia.get(k) for k in ('bloqueado','motivo','escala',
-                'escala_angular','holgura_minima_m','recuperacion_margen','esperando_frenado')}
+                'escala_angular','holgura_minima_m','recuperacion_margen','esperando_frenado',
+                'solo_diagnostico','esperando_rodeo','comando_sin_guardia')}
             resumen['edad_captura_scan_s'] = self.diagnostico_observacion.get('nav_edad_captura_scan_s')
             resumen['salto_correccion_max_m'] = getattr(self,'_nav_salto_m',0.)
             resumen['salto_correccion_max_rad'] = getattr(self,'_nav_salto_rad',0.)
