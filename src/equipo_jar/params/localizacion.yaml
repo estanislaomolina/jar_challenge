@@ -72,7 +72,7 @@ nodo_equipo:
     concordancia_min_supervision: 0.70  # Sólo tras la primera LISTA
     estabilidad_xy_m: 0.03
     estabilidad_yaw_rad: 0.035
-    frescura_sensores_s: 1.0
+    frescura_sensores_s: 1.5  # antes 0,6; scans del robot real llegan atrasados (propuesta de Belu)
     tolerancia_mapa_m: 0.10
     min_rayos_validos: 30
     # M2: un hueco breve de datos o de calidad detiene sin gastar una recuperación.
