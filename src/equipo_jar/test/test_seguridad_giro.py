@@ -63,7 +63,7 @@ def test_guardia_insegura_no_se_ignora_aunque_rango_minimo_sea_grande():
 
 
 def test_obstaculo_nuevo_detiene_giro_sin_rearme():
-    c=LocalizacionActiva()
+    c=LocalizacionActiva(modo_degradado=False)
     c.paso(0.,True,obs(True))
     assert c.paso(.1,True,obs(True))>0
     assert c.paso(.2,True,obs(False,1.))==0

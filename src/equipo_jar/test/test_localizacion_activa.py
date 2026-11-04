@@ -7,6 +7,14 @@ import pytest
 from equipo_jar.localizacion_activa import LocalizacionActiva, Observacion, concordancia_mapa
 
 
+_LocalizacionOriginal = LocalizacionActiva
+
+
+def LocalizacionActiva(**k):  # tests heredados: comportamiento estricto
+    k.setdefault('modo_degradado', False)
+    return _LocalizacionOriginal(**k)
+
+
 def observacion(secuencia=1, yaw=0.0, distancia=1.0, coincidencia=0.95):
     return Observacion(yaw, (0.0, 0.0, yaw), secuencia, 0.10, 0.10,
                        coincidencia, distancia)
@@ -182,3 +190,50 @@ def test_inicial_078_no_llega_a_lista_aunque_supervision_permita_070():
 def test_supervision_rechaza_umbral_invalido(minimo):
     with pytest.raises(ValueError):
         LocalizacionActiva(concordancia_min_supervision=minimo)
+
+
+def test_degradado_habilita_tras_falla_inicial_con_concordancia_baja():
+    control = _LocalizacionOriginal(plazo_verificacion=3)
+    for secuencia, instante in enumerate((0, 0.5, 1, 2, 3.1), start=1):
+        control.paso(instante, True, Observacion(0.0, (0.0, 0.0, 0.0), secuencia,
+                     0.30, 0.40, 0.5, 0.30))
+    assert control.degradado and control.estado == 'RECUPERANDO'
+    for secuencia, instante in enumerate((3.2, 3.3, 3.4), start=10):
+        control.paso(instante, True, Observacion(0.0, (0.05, 0.0, 0.0), secuencia,
+                     0.30, 0.40, 0.5, 0.30))
+    assert control.utilizable
+
+
+def test_degradado_no_habilita_pose_no_finita():
+    control = _LocalizacionOriginal(plazo_verificacion=3)
+    control.paso(0, True, observacion(distancia=0.30, coincidencia=0.1))
+    control.paso(3.1, True, None)
+    for secuencia, instante in enumerate((3.2, 3.3, 3.4), start=10):
+        control.paso(instante, True, Observacion(0.0, (float('nan'), 0.0, 0.0),
+                     secuencia, 0.30, 0.40, 0.5, 0.30))
+    assert not control.utilizable
+
+
+def test_recuperacion_tolera_huecos_breves_de_sensores():
+    """Patrón visto en simulación: buena calidad intercalada con SENSORES_VENCIDOS."""
+    control = _LocalizacionOriginal(plazo_verificacion=3)
+    control.paso(0, True, observacion(distancia=0.30, coincidencia=0.1))
+    control.paso(3.1, True, None)
+    assert control.estado == 'RECUPERANDO'
+    t, s = 3.2, 20
+    for i in range(3):
+        if i:
+            control.paso(t, True, None); t += 0.3
+        control.paso(t, True, observacion(secuencia=s)); s += 1; t += 0.2
+    assert control.utilizable
+
+
+def test_recuperacion_descarta_muestras_tras_ausencia_sostenida():
+    control = _LocalizacionOriginal(plazo_verificacion=3, plazo_falta_datos=2.0)
+    control.paso(0, True, observacion(distancia=0.30, coincidencia=0.1))
+    control.paso(3.1, True, None)
+    control.paso(3.2, True, observacion(secuencia=20))
+    control.paso(3.3, True, observacion(secuencia=21))
+    control.paso(3.4, True, None)
+    control.paso(5.6, True, None)
+    assert control.muestras == []

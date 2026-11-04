@@ -75,6 +75,8 @@ class NodoEquipo(Node):
             'min_rayos_validos': 30, 'muestra_rayos': 120,
             'deficit_obstaculo_m': 0.40, 'plazo_falta_datos_s': 2.0,
             'plazo_falla_calidad_s': 1.0,
+            'modo_degradado': True, 'degradado_std_xy_m': 0.40,
+            'degradado_std_yaw_rad': 0.60, 'degradado_concordancia': 0.40,
             # M2: navegación hacia una meta y regreso (valores generales, sin coordenadas).
             'modo_navegacion': 'inactivo', 'prueba_en_seco': False,
             'nav_alcance_blando_m': 0.25, 'nav_peso_costo': 5.0,
@@ -119,7 +121,11 @@ class NodoEquipo(Node):
             recuperacion_activa=self.valor('recuperacion_activa_post_lista'),
             espera_recuperacion_activa=self.valor('espera_recuperacion_activa_s'),
             giro_recuperacion=self.valor('giro_recuperacion_rad'),
-            max_intentos_activos=self.valor('max_intentos_recuperacion_activa'))
+            max_intentos_activos=self.valor('max_intentos_recuperacion_activa'),
+            modo_degradado=self.valor('modo_degradado'),
+            degradado_std_xy=self.valor('degradado_std_xy_m'),
+            degradado_std_yaw=self.valor('degradado_std_yaw_rad'),
+            degradado_concordancia=self.valor('degradado_concordancia'))
         for nombre in ('recuperacion_std_xy_m', 'recuperacion_std_yaw_rad'):
             if not math.isfinite(self.valor(nombre)) or self.valor(nombre) <= 0:
                 raise ValueError('Covarianza de reinicialización local inválida')
@@ -697,7 +703,7 @@ class NodoEquipo(Node):
             else:
                 self.t_fin_quieto = None
         estado = {
-            'estado': self.control.estado, 'motivo': self.control.motivo,
+            'estado': self.control.estado, 'motivo': self.control.motivo, 'degradado': getattr(self.control, 'degradado', False),
             'lista': self.control.estado == 'LISTA' and observacion is not None,
             'utilizable': self.control.utilizable and observacion is not None,
             'concordancia_simple': self.diagnostico_observacion.get('concordancia_simple'),

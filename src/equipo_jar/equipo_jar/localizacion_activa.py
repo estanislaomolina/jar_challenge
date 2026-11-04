@@ -249,7 +249,17 @@ class LocalizacionActiva:
                  plazo_falta_datos=2.0, plazo_falla_calidad=1.0,
                  concordancia_min_supervision=0.70, recuperacion_activa=False,
                  espera_recuperacion_activa=3.0, giro_recuperacion=math.radians(35),
-                 max_intentos_activos=3):
+                 max_intentos_activos=3, modo_degradado=True,
+                 degradado_std_xy=0.40, degradado_std_yaw=0.60,
+                 degradado_concordancia=0.40, degradado_factor_estabilidad=4.0):
+        # Modo degradado (competencia 2026-11-04): ante falla de calidad estricta,
+        # seguir con criterios relajados en lugar de quedar detenido para siempre.
+        self.modo_degradado = bool(modo_degradado)
+        self.degradado = False
+        self.degradado_std_xy = degradado_std_xy
+        self.degradado_std_yaw = degradado_std_yaw
+        self.degradado_concordancia = degradado_concordancia
+        self.degradado_factor_estabilidad = degradado_factor_estabilidad
         positivos = (velocidad, giro, presupuesto, plazo_giro, plazo_verificacion,
                      espacio, max_std_xy, max_std_yaw, estabilidad_xy, estabilidad_yaw,
                      plazo_recuperacion, plazo_falta_datos, plazo_falla_calidad)
@@ -307,6 +317,9 @@ class LocalizacionActiva:
         """Fallo inicial terminal; tras LISTA reintenta siempre con el robot detenido."""
         if self.secuencia_lista >= 0:
             return self.recuperar(self.ultimo_ahora, motivo)
+        if self.modo_degradado and self.ultimo_ahora is not None:
+            self.degradado = True
+            return self.recuperar(self.ultimo_ahora, 'Modo degradado: ' + motivo)
         self.estado = 'INSUFICIENTE'
         self.motivo = motivo
         return 0.0
@@ -316,6 +329,8 @@ class LocalizacionActiva:
         self.giro_activo = False
         self.t_guardia_sin_datos = None
         self.recuperaciones += 1
+        if self.modo_degradado and self.recuperaciones > self.max_recuperaciones:
+            self.degradado = True
         self.t_utilizable_desde = None
         self.t_falta_datos = self.t_falla_calidad = None
         self.inicio_recuperacion = ahora
@@ -371,8 +386,14 @@ class LocalizacionActiva:
             if ahora - self.inicio_recuperacion >= self.plazo_recuperacion:
                 return self.recuperar(ahora, 'Plazo de recuperación agotado: detenido y reintentando')
             if observacion is None:
-                self.muestras = []
+                # Huecos breves de sensores (scan/odom > frescura) no descartan
+                # las muestras; sólo una ausencia sostenida las invalida.
+                if self.t_falta_datos is None:
+                    self.t_falta_datos = ahora
+                if ahora - self.t_falta_datos > self.plazo_falta_datos:
+                    self.muestras = []
                 return 0.0
+            self.t_falta_datos = None
             if self.estable_y_valida(observacion):
                 self.estado = 'LISTA'
                 self.t_utilizable_desde = ahora
@@ -522,9 +543,14 @@ class LocalizacionActiva:
         # secuencia_lista se fija sólo después de completar la primera LISTA.
         supervision = self.secuencia_lista >= 0
         minimo = self.concordancia_min_supervision if supervision else self.concordancia_min
+        max_xy, max_yaw = self.max_std_xy, self.max_std_yaw
+        if self.degradado:
+            minimo = min(minimo, self.degradado_concordancia)
+            max_xy = max(max_xy, self.degradado_std_xy)
+            max_yaw = max(max_yaw, self.degradado_std_yaw)
         return (all(math.isfinite(v) for v in valores)
-                and 0 <= observacion.std_xy <= self.max_std_xy
-                and 0 <= observacion.std_yaw <= self.max_std_yaw
+                and 0 <= observacion.std_xy <= max_xy
+                and 0 <= observacion.std_yaw <= max_yaw
                 and minimo <= observacion.concordancia <= 1.0)
 
     def estable_y_valida(self, observacion):
@@ -536,8 +562,9 @@ class LocalizacionActiva:
         if len(self.muestras) != 3 or not all(self.calidad(m) for m in self.muestras):
             return False
         primera = self.muestras[0].pose
+        factor = self.degradado_factor_estabilidad if self.degradado else 1.0
         return all(
             math.hypot(m.pose[0] - primera[0], m.pose[1] - primera[1])
-            <= self.estabilidad_xy
-            and abs(diferencia_angular(m.pose[2], primera[2])) <= self.estabilidad_yaw
+            <= self.estabilidad_xy*factor
+            and abs(diferencia_angular(m.pose[2], primera[2])) <= self.estabilidad_yaw*factor
             for m in self.muestras)

@@ -73,10 +73,11 @@ def test_datos_perdidos_interrumpen_las_muestras_de_recuperacion():
     control.paso(101, True, medida(7))
     control.paso(102, True, medida(8))
     control.paso(103, True, None)
-    control.paso(104, True, medida(9))
+    control.paso(105.2, True, None)  # ausencia sostenida > plazo_falta_datos
+    control.paso(106, True, medida(9))
     assert control.estado == 'RECUPERANDO'
-    control.paso(105, True, medida(10))
-    control.paso(106, True, medida(11))
+    control.paso(107, True, medida(10))
+    control.paso(108, True, medida(11))
     assert control.estado == 'LISTA'
 
 
@@ -227,7 +228,7 @@ def test_falla_breve_interrumpe_los_30s_continuos():
 
 
 def test_adquisicion_inicial_sigue_fallando_y_no_se_rearma():
-    control = LocalizacionActiva(presupuesto=1.)
+    control = LocalizacionActiva(presupuesto=1., modo_degradado=False)
     control.paso(0., True, None)
     control.paso(2., True, None)
     assert control.estado == 'INSUFICIENTE'

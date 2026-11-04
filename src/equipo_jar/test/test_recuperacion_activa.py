@@ -61,7 +61,7 @@ def test_opposite_turn_direction_and_guard_plan():
  assert c.paso(6.2,True,obs(12,yaw=-.62))==0. and c.estado=='VERIFICANDO'
 
 def test_initial_acquisition_still_fails_and_never_requests_reset():
- c=LocalizacionActiva(recuperacion_activa=True,presupuesto=1.)
+ c=LocalizacionActiva(recuperacion_activa=True,presupuesto=1.,modo_degradado=False)
  c.paso(0,True,None);c.paso(2,True,None)
  assert c.estado=='INSUFICIENTE' and c.reinicios_locales==0 and not c.utilizable
 
