@@ -34,6 +34,9 @@ class NodoPercepcion(Node):
         self.declare_parameter('frecuencia_hz', 2.)
         self.declare_parameter('frescura_s', .8)
         self.declare_parameter('rafaga_s', 2.)
+        # Competencia 2026-11-04: la nube satura el robot (aviso de la organización);
+        # limitar ráfagas evita atrasar el LiDAR y la localización.
+        self.declare_parameter('pausa_rafagas_s', 4.)
         self.declare_parameter('habilitada', True)
         self.declare_parameter('solo_observar', False)
         self.declare_parameter('asumir_base_cuadrada', False)
@@ -55,6 +58,7 @@ class NodoPercepcion(Node):
         self.localizacion = {}
         self.t_localizacion = -math.inf
         self.ultima_imagen = -math.inf
+        self.inicio_rafaga = -math.inf
         self.ultima_nube = -math.inf
         self.sub_nube = None
         self.nube_pendiente = None
@@ -218,7 +222,9 @@ class NodoPercepcion(Node):
             self.estado('IMAGEN_INVALIDA', detalle=str(error))
             return
         self.publicar_observacion(msg.header, candidate)
-        if candidate and self.sub_nube is None:
+        if (candidate and self.sub_nube is None
+                and now-self.inicio_rafaga >= self.get_parameter('pausa_rafagas_s').value):
+            self.inicio_rafaga = now
             # Suscripción sólo por ráfagas: la nube completa puede elevar latencia.
             self.sub_nube = self.create_subscription(
                 PointCloud2, '/cam_1/depth/color/points', self.al_nube, qos_profile_sensor_data)

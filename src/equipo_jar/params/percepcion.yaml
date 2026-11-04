@@ -5,7 +5,8 @@ percepcion:
     vista_despeje_m: 0.30
     frecuencia_hz: 2.0
     frescura_s: 0.8
-    rafaga_s: 2.0
+    rafaga_s: 1.0
+    pausa_rafagas_s: 4.0  # competencia 2026-11-04: nube de puntos satura el robot
     tono_rojo_max: 10
     saturacion_min: 120
     brillo_min: 45
