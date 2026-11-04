@@ -8,7 +8,7 @@ amcl:
     scan_topic: /scan
     robot_model_type: nav2_amcl::OmniMotionModel
     tf_broadcast: true
-    transform_tolerance: 0.3
+    transform_tolerance: 0.5
     set_initial_pose: false
     always_reset_initial_pose: true
     first_map_only: true
