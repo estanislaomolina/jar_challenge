@@ -23,9 +23,14 @@ def test_no_guard_no_rotation_but_reinitializes():
  c.paso(6.,True,obs(safe=None));assert c.reinicios_locales==2 and c.estado=='RECUPERANDO'
 
 def test_turn_stops_on_missing_or_unsafe_scan():
- for value in (None,obs(safe=False),obs(safe=None)):
+ for value in (obs(safe=False),obs(safe=None)):
   c=recovering();c.paso(3.,True,obs());assert c.paso(3.2,True,value)==0.
   assert c.estado=='RECUPERANDO' and not c.utilizable and not c.giro_activo
+ # Sin datos/TF: quieto durante la gracia de la guardia y luego aborta.
+ c=recovering();c.paso(3.,True,obs());assert c.paso(3.2,True,None)==0.
+ assert c.estado=='GIRANDO' and not c.utilizable
+ assert c.paso(4.3,True,None)==0.
+ assert c.estado=='RECUPERANDO' and not c.utilizable and not c.giro_activo
 
 def test_turn_stops_at_bound_requires_new_stable_poses():
  c=recovering();c.recuperar(97.,'Nueva pérdida');c.paso(100.,True,obs())  # initial35s budget must not apply afterLISTA

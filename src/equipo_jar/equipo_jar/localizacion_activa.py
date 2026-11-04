@@ -239,6 +239,8 @@ class Observacion:
 class LocalizacionActiva:
     """Controla giros acotados y verificación de calidad después de detenerse."""
 
+    GRACIA_GUARDIA_S = 1.0
+
     def __init__(self, velocidad=0.15, giro=math.radians(20), max_giros=3,
                  presupuesto=35.0, plazo_giro=12.0, plazo_verificacion=5.0,
                  espacio=0.35, max_std_xy=0.15, max_std_yaw=0.15,
@@ -271,6 +273,7 @@ class LocalizacionActiva:
         self.ultimo_reinicio_local = None
         self.giro_activo = False
         self.direccion_activa = 1
+        self.t_guardia_sin_datos = None
         self.plazo_recuperacion = plazo_recuperacion
         self.plazo_falta_datos = plazo_falta_datos
         self.plazo_falla_calidad = plazo_falla_calidad
@@ -311,6 +314,7 @@ class LocalizacionActiva:
     def recuperar(self, ahora, motivo):
         """Después de LISTA, reintenta quieto sin relajar los criterios de calidad."""
         self.giro_activo = False
+        self.t_guardia_sin_datos = None
         self.recuperaciones += 1
         self.t_utilizable_desde = None
         self.t_falta_datos = self.t_falla_calidad = None
@@ -472,7 +476,16 @@ class LocalizacionActiva:
     def paso_giro_recuperacion(self, ahora, observacion):
         """Giro acotado sin traslación; sólo tres poses nuevas válidas devuelven LISTA."""
         if self.estado == 'GIRANDO':
-            if observacion is None or observacion.giro_seguro is not True:
+            if observacion is None:
+                # Sin datos/TF recientes (p. ej. justo tras reiniciar AMCL): quieto hasta
+                # GRACIA_GUARDIA_S antes de abortar. Nunca gira sin guardia.
+                if self.t_guardia_sin_datos is None:
+                    self.t_guardia_sin_datos = ahora
+                if ahora - self.t_guardia_sin_datos <= self.GRACIA_GUARDIA_S:
+                    return 0.0
+                return self.recuperar(ahora, 'Guardia detuvo el giro de recuperación')
+            self.t_guardia_sin_datos = None
+            if observacion.giro_seguro is not True:
                 return self.recuperar(ahora, 'Guardia detuvo el giro de recuperación')
             delta = self.direccion_activa*diferencia_angular(observacion.yaw_odom, self.yaw_inicial)
             if delta >= self.giro_recuperacion or ahora-self.inicio_giro > self.plazo_giro:
