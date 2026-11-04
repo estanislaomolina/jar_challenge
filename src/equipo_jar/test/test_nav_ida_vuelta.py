@@ -169,7 +169,8 @@ def test_obstaculo_nuevo_replanifica_por_otro_pasillo():
 
     registro = correr(iv, mundo, (0.35, 1.0, 0.0), 4000, al_paso=poner_caja)
     assert iv.estado == 'EN_LARGADA', iv.motivo
-    assert iv.resumen()['replanificaciones'] >= 1
+    resumen = iv.resumen()  # replanificación por guardia o, antes, por capa viva
+    assert resumen['replanificaciones'] + resumen['replanificaciones_capa'] >= 1
     cx, cy = caja[0]
     # Ninguna parte del robot toca la caja: centro a más de semidiagonal + medio lado.
     assert min(math.hypot(r[1] - cx, r[2] - cy) for r in registro) > 0.225 + 0.10

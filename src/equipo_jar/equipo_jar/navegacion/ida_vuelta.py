@@ -107,6 +107,11 @@ class IdaVuelta:
         self.yaw_trayecto = None
         self.solicitud_regreso = False
         self.largada_fijada = False
+        # Competencia 2026-11-04: obstáculo fuera del mapa en la ruta. Replanificar
+        # al verlo (capa viva) y tras un escape, en vez de insistir con la ruta vieja.
+        self.t_replan_capa = -math.inf
+        self.replan_tras_escape = False
+        self.replanificaciones_capa = 0
 
     def invalidar_plan_por_localizacion(self):
         """Descarta también resultados pendientes calculados en la pose anterior."""
@@ -442,11 +447,58 @@ class IdaVuelta:
             return Comando.cero()
         return self._quieto(self._avanzar(e))
 
+    def _ruta_invadida(self, pose, ocupadas, alcance_m=1.5, ignorar_m=0.20):
+        """True si el tramo próximo de la ruta pasa junto a celdas de la capa viva."""
+        if self.ruta is None or not ocupadas.any():
+            return False
+        puntos = list(self.ruta.puntos)
+        if len(puntos) < 2:
+            return False
+        g = self.grilla
+        radio = self.p_costos.radio_inscripto_m + self.p_costos.margen_m/2
+        r = max(1, math.ceil(radio / g.resolucion))
+        dy, dx = np.mgrid[-r:r+1, -r:r+1]
+        disco = np.hypot(dy, dx) * g.resolucion <= radio
+        cercano = min(range(len(puntos)), key=lambda i: math.dist(puntos[i], (pose.x, pose.y)))
+        recorrido = 0.0
+        for a, b in zip(puntos[cercano:], puntos[cercano+1:]):
+            largo = math.dist(a, b)
+            n = max(1, math.ceil(largo / g.resolucion))
+            for k in range(n + 1):
+                if recorrido + largo*k/n > alcance_m:
+                    return False
+                x, y = a[0]+(b[0]-a[0])*k/n, a[1]+(b[1]-a[1])*k/n
+                if math.dist((x, y), (pose.x, pose.y)) < ignorar_m:
+                    continue
+                celda = g.a_celda(x, y)
+                if celda is None:
+                    continue
+                f, c = celda
+                f0, f1, c0, c1 = max(0, f-r), min(g.alto, f+r+1), max(0, c-r), min(g.ancho, c+r+1)
+                ventana = ocupadas[f0:f1, c0:c1]
+                if (ventana & disco[f0-f+r:f1-f+r, c0-c+r:c1-c+r]).any():
+                    return True
+            recorrido += largo
+        return False
+
+    def _replanificar_por_capa(self, e, fase):
+        self.t_replan_capa = e.ahora
+        self.replanificaciones_capa += 1
+        self.seguidor.detener()
+        self.motivo = 'Obstáculo fuera del mapa en la ruta: replanificando'
+        if self._planificar(e.pose, fase):
+            return Comando.cero()
+        return self._bloqueado(e, fase)
+
     def _avanzar(self, e):
         self._registrar_traza(e.pose)
         fase = self._fase()
         if self.ruta is None:
             return self._bloqueado(e,fase)
+        if (e.ahora - self.t_replan_capa >= 1.5 and self.plan_pendiente is None
+                and self.t_recuperacion_margen is None
+                and self._ruta_invadida(e.pose, self.capa.ocupadas(e.ahora))):
+            return self._replanificar_por_capa(e, fase)
         celda = self.grilla.a_celda(e.pose.x, e.pose.y)
         espacio = float(self.distancia[celda]) if celda is not None else 0.0
         if not self.p.regreso_automatico:
@@ -493,6 +545,13 @@ class IdaVuelta:
                     if self.t_recuperacion_margen is None:
                         self.t_recuperacion_margen=e.ahora
                         self.estampa_inicio_recuperacion=scan_s
+                        # Recordar lo que frenó el barrido: al salir del escape se
+                        # replanifica con ese obstáculo en vez de retomar la ruta.
+                        c,s=math.cos(e.pose.yaw),math.sin(e.pose.yaw)
+                        self.capa.registrar_bloqueo(e.ahora,[
+                            (e.pose.x+c*p[0]-s*p[1],e.pose.y+s*p[0]+c*p[1])
+                            for p in diag.get('bloqueantes_base_m',[])])
+                        self.replan_tras_escape=True
                     rx,ry,recovery=escape
                     self.seguidor.detener()
                     espera=max(self.seguidor.p.velocidad_max/self.p.desaceleracion,
@@ -506,6 +565,9 @@ class IdaVuelta:
         if not diag['bloqueado']:
             self.reintentos_bloqueo=0
             self.t_recuperacion_margen=None
+            if self.replan_tras_escape and self.plan_pendiente is None:
+                self.replan_tras_escape=False
+                return self._replanificar_por_capa(e, fase)
             if self.estado == 'BLOQUEADO':
                 self.estado, self.previo, self.motivo = fase, None, ''
             self.t_bloqueo = self.t_inicio_bloqueo = None
@@ -569,6 +631,7 @@ class IdaVuelta:
             'meta': list(self.meta) if self.meta else None,
             'restante_m': self.seguidor.restante_m if self.ruta else None,
             'replanificaciones': self.replanificaciones,
+            'replanificaciones_capa': self.replanificaciones_capa,
             'reintentos_bloqueo':self.reintentos_bloqueo,
             'retorno_con_historial':self.retorno_con_historial,
             'diagnostico_historial':self.diagnostico_historial,
