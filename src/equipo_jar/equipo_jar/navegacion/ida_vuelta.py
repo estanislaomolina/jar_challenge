@@ -96,6 +96,8 @@ class IdaVuelta:
         self.t_movimiento = None
         self.ahora = 0.0
         self.ultima_pose=None
+        self.ancla_progreso=None
+        self._fase_progreso=None
         self.ultima_guardia={}
         self.t_recuperacion_margen=None
         self.ultima_propuesta=None
@@ -154,6 +156,7 @@ class IdaVuelta:
         self.replanificaciones = 0
         self.reintentos_bloqueo=0
         self.t_bloqueo = self.t_inicio_bloqueo = self.t_movimiento = None
+        self.ancla_progreso = None
 
     def pausar_inspeccion(self):
         """Pausa M4 sin perder largada ni declarar un fallo."""
@@ -186,6 +189,7 @@ class IdaVuelta:
         self.replanificaciones = 0
         self.reintentos_bloqueo=0
         self.t_bloqueo = self.t_inicio_bloqueo = self.t_movimiento = None
+        self.ancla_progreso = None
 
     @property
     def seguidor(self):
@@ -326,6 +330,9 @@ class IdaVuelta:
         if ruta is None:
             self.ruta=None
             return False
+        if getattr(self, "_fase_progreso", None) != fase:
+            self.ancla_progreso = None
+            self._fase_progreso = fase
         self.ruta=ruta
         seguidor=self.seguidor_ida if fase=='YENDO' else self.seguidor_vuelta
         rumbo = self.largada[2] if self.p.regreso_automatico else self.yaw_trayecto
@@ -356,7 +363,7 @@ class IdaVuelta:
         pose = getattr(self, 'ultima_pose', None)
         if pose is None:
             return Comando.cero()
-        if self.t_movimiento is None or not hasattr(self, 'ancla_progreso'):
+        if self.t_movimiento is None or getattr(self, 'ancla_progreso', None) is None:
             self.t_movimiento = self.ahora
             self.ancla_progreso = pose
             self.ancla_xy = pose
@@ -372,7 +379,7 @@ class IdaVuelta:
             self.ancla_xy = pose
         if (self.ahora-self.t_movimiento > self.p.plazo_detenido_s or
                 self.ahora-self.t_progreso_xy > 2*self.p.plazo_detenido_s):
-            return self._fallar('Sin progreso físico: abandonar intento de navegación')
+            return self._fallar('Detenido sin progreso físico: abandonar intento de navegación')
         return cmd
 
     def paso(self, e):
@@ -536,12 +543,19 @@ class IdaVuelta:
                 else:
                     self.estado = 'EN_LARGADA'
                 return Comando.cero()
-            p = self.seguidor.p
-            cmd = type(cmd)(0., 0., max(-p.velocidad_angular_max,
-                min(p.velocidad_angular_max, p.ganancia_yaw*error)))
+            cmd = self.seguidor.alinear(e.ahora, error)
+        # No elevar nunca un comando después de comprobar el barrido.
+        escalas = (1., .75, .5, .25, .1)
+        p = self.seguidor.p
+        if math.hypot(cmd.vx,cmd.vy) < 1e-3 and abs(cmd.wz) >= 1e-3:
+            w = math.copysign(min(p.velocidad_angular_max,
+                                  max(abs(cmd.wz),p.velocidad_angular_min)),cmd.wz)
+            cmd = type(cmd)(0.,0.,w)
+            escalas = tuple(s for s in escalas if abs(w)*s+1e-12 >= p.velocidad_angular_min)
         vx, vy, diag = limitar_velocidad(e.puntos_base, cmd.vx, cmd.vy, self.huella_operativa,
                                          self.p.desaceleracion, self.p.latencia_s,
-                                         wz=cmd.wz,desaceleracion_angular=self.p.desaceleracion_angular)
+                                         escalas=escalas, wz=cmd.wz,
+                                         desaceleracion_angular=self.p.desaceleracion_angular)
         stamp=e.estampa_scan
         scan_s=(stamp[0]+stamp[1]*1e-9 if isinstance(stamp,(tuple,list))
                 and len(stamp)==2 else None)

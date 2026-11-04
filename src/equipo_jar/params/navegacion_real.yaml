@@ -10,4 +10,11 @@ nodo_equipo:
 
     # Candidato de revisión: no validado en robot.
     nav_velocidad_angular_min: 0.35
-    nav_plazo_alineacion_s: 8.0
+    nav_plazo_alineacion_s: 30.0
+
+    # Candidato: observar la respuesta entre correcciones cercanas al rumbo.
+    nav_ganancia_yaw: 1.5
+    nav_velocidad_angular_max: 0.5
+    nav_pulso_giro_s: 0.20
+    nav_asentamiento_giro_s: 1.0
+    nav_plazo_detenido_s: 20.0

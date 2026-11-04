@@ -19,6 +19,8 @@ class ParametrosSeguimiento:
     dt_max_s: float
     velocidad_angular_min: float = 0.0
     plazo_alineacion_s: float = 8.0
+    pulso_giro_s: float = 0.20
+    asentamiento_giro_s: float = 0.0
 
     def __post_init__(self):
         if not (math.isfinite(self.velocidad_angular_min) and
@@ -26,6 +28,9 @@ class ParametrosSeguimiento:
             raise ValueError("Velocidad angular mínima inválida")
         if not math.isfinite(self.plazo_alineacion_s) or self.plazo_alineacion_s <= 0:
             raise ValueError("Plazo de alineación inválido")
+        if not (math.isfinite(self.pulso_giro_s) and self.pulso_giro_s > 0
+                and math.isfinite(self.asentamiento_giro_s) and self.asentamiento_giro_s >= 0):
+            raise ValueError("Tiempos de giro inválidos")
         valores = (self.velocidad_max, self.aceleracion_max, self.distancia_mira_m,
                    self.tolerancia_meta_m, self.ganancia_yaw, self.velocidad_angular_max,
                    self.espacio_lento_m, self.espacio_rapido_m, self.velocidad_cerca_pared,
@@ -60,6 +65,7 @@ class Seguidor:
         self.t_previo=None
         self.llego = False
         self.restante_m = 0.0
+        self._reiniciar_alineacion()
 
     def reiniciar(self, ruta, yaw_mantener):
         self.precision_vertice_m=ruta.precision_vertice_m
@@ -68,8 +74,7 @@ class Seguidor:
         self.orientaciones = ruta.orientaciones
         self.rumbo_final = getattr(ruta, 'rumbo_final', None)
         self.indice_orientado = 0
-        self.alineando_desde = None
-        self.atascado = False
+        self._reiniciar_alineacion()
         self.tramo_orientado = None
         self.puntos = list(ruta.puntos)
         self.yaw_mantener = yaw_mantener
@@ -79,6 +84,50 @@ class Seguidor:
         self.t_previo = None
         self.llego = False
         self.restante_m = ruta.largo_m
+
+    def _reiniciar_alineacion(self):
+        self.atascado = False
+        self.t_alineacion_s = 0.0
+        self._alineando = False
+        self._t_paso_alineacion = None
+        self._pulso_hasta = None
+        self._esperar_hasta = -math.inf
+        self._cerca = False
+        self._signo_pulso = 0.0
+
+    def alinear(self, ahora, error):
+        """Giro acotado; con retardo, observar entre pulsos cerca del rumbo."""
+        self._alineando = True
+        if self.atascado or self.t_alineacion_s >= self.p.plazo_alineacion_s:
+            self.atascado = True
+            self.detener()
+            return Comando.cero()
+        espera = self.p.asentamiento_giro_s
+        if espera > 0:
+            if self._pulso_hasta is not None:
+                if (ahora >= self._pulso_hasta or abs(error) <= .06
+                        or error*self._signo_pulso <= 0):
+                    self._pulso_hasta = None
+                    self._esperar_hasta = ahora + espera
+                    return Comando.cero()
+            if ahora < self._esperar_hasta:
+                return Comando.cero()
+            if abs(error) <= .06:
+                return Comando.cero()
+            if abs(error) <= .20:
+                # Primero dejar que termine el giro continuo ya encolado.
+                if not self._cerca:
+                    self._cerca = True
+                    self._esperar_hasta = ahora + espera
+                    return Comando.cero()
+                if self._pulso_hasta is None:
+                    self._pulso_hasta = ahora + self.p.pulso_giro_s
+                    self._signo_pulso = math.copysign(1., error)
+            else:
+                self._cerca = False
+        w = min(self.p.velocidad_angular_max,
+                max(self.p.velocidad_angular_min, self.p.ganancia_yaw*abs(error)))
+        return Comando(0., 0., math.copysign(w, error))
 
     def detener(self):
         self.rapidez=0.
@@ -112,6 +161,11 @@ class Seguidor:
 
     def paso(self, ahora, pose, espacio_libre_m):
         """Comando en el marco del robot; cero al llegar."""
+        if self.atascado:return Comando.cero()
+        if self._alineando and self._t_paso_alineacion is not None:
+            self.t_alineacion_s += max(0., ahora-self._t_paso_alineacion)
+        self._t_paso_alineacion = ahora
+        self._alineando = False
         if len(self.puntos)<2:return Comando.cero()
         if self.orientaciones is not None:
             return self._paso_orientado(ahora,pose,espacio_libre_m)
@@ -153,6 +207,9 @@ class Seguidor:
 
 
     def _paso_orientado(self,ahora,pose,espacio):
+        if (self._pulso_hasta is not None or ahora < self._esperar_hasta):
+            i = min(self.indice_orientado, len(self.orientaciones)-1)
+            return self.alinear(ahora, _diferencia_angular(self.orientaciones[i], pose.yaw))
         # La misión solicita posición, igual que el seguidor XY. No exigir
         # visitar un vértice anterior ni un rumbo final no solicitado.
         if (math.dist((pose.x,pose.y),self.puntos[-1])<=self.p.tolerancia_meta_m
@@ -169,21 +226,12 @@ class Seguidor:
             tolerance=self.p.tolerancia_meta_m if i==len(self.puntos)-1 else min(self.precision_vertice_m,self.p.tolerancia_meta_m)
             self.restante_m=distance+sum(math.dist(a,b) for a,b in zip(self.puntos[i:],self.puntos[i+1:]))
             if distance<=tolerance and abs(error)<=.06:
-                self.alineando_desde=None
+                self._reiniciar_alineacion()
                 self.indice_orientado+=1;self.tramo_orientado=None
                 continue
             if abs(error)>.08 or (distance<=tolerance and abs(error)>.06):
                 self.tramo_orientado=None
-                if self.alineando_desde is None:self.alineando_desde=ahora
-                if ahora-self.alineando_desde >= self.p.plazo_alineacion_s:
-                    self.atascado=True
-                    self.detener()
-                    return Comando.cero()
-                w=max(-self.p.velocidad_angular_max,min(self.p.velocidad_angular_max,self.p.ganancia_yaw*error))
-                if abs(w)<self.p.velocidad_angular_min:
-                    w=math.copysign(self.p.velocidad_angular_min,error)
-                return Comando(0.,0.,w)
-            self.alineando_desde=None
+                return self.alinear(ahora, error)
             if self.tramo_orientado is None:
                 self.tramo_orientado=Seguidor(replace(self.p,tolerancia_meta_m=tolerance))
                 self.tramo_orientado.reiniciar(Ruta([(pose.x,pose.y),target],distance,distance),self.orientaciones[i])

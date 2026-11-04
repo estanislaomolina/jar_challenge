@@ -83,6 +83,7 @@ class NodoEquipo(Node):
             'nav_velocidad_max': 0.30, 'nav_aceleracion_max': 0.4,
             'nav_distancia_mira_m': 0.20, 'nav_tolerancia_meta_m': 0.03,
             'nav_velocidad_angular_min': 0.0, 'nav_plazo_alineacion_s': 8.0,
+            'nav_pulso_giro_s': 0.20, 'nav_asentamiento_giro_s': 0.0,
             'nav_ganancia_yaw': 1.5, 'nav_velocidad_angular_max': 0.5,
             'nav_espacio_lento_m': 0.25, 'nav_espacio_rapido_m': 0.45,
             'nav_velocidad_cerca_pared': 0.10, 'nav_dt_max_s': 0.2,
@@ -491,7 +492,8 @@ class NodoEquipo(Node):
             v('nav_ganancia_yaw'), v('nav_velocidad_angular_max'),
             v('nav_espacio_lento_m'), v('nav_espacio_rapido_m'),
             v('nav_velocidad_cerca_pared'), v('nav_dt_max_s'),
-            v('nav_velocidad_angular_min'), v('nav_plazo_alineacion_s'))
+            v('nav_velocidad_angular_min'), v('nav_plazo_alineacion_s'),
+            v('nav_pulso_giro_s'), v('nav_asentamiento_giro_s'))
         ida_vuelta = ParametrosIdaVuelta(
             v('nav_plazo_detenido_s'), v('nav_espera_bloqueo_s'),
             v('nav_max_replanificaciones'), v('nav_plazo_bloqueo_total_s'),
