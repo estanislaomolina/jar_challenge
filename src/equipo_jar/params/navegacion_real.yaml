@@ -7,3 +7,7 @@ nodo_equipo:
     nav_velocidad_cerca_pared: 0.05
     nav_desaceleracion: 0.3
     nav_latencia_s: 0.25
+
+    # Candidato de revisión: no validado en robot.
+    nav_velocidad_angular_min: 0.35
+    nav_plazo_alineacion_s: 8.0

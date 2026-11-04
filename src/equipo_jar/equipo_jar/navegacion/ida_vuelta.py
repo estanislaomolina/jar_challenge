@@ -353,11 +353,26 @@ class IdaVuelta:
 
     def _quieto(self, cmd):
         """Registra el último movimiento y corta si lleva demasiado tiempo quieto."""
-        if not cmd.es_cero() or self.t_movimiento is None:
+        pose = getattr(self, 'ultima_pose', None)
+        if pose is None:
+            return Comando.cero()
+        if self.t_movimiento is None or not hasattr(self, 'ancla_progreso'):
             self.t_movimiento = self.ahora
-            return cmd
-        if self.ahora - self.t_movimiento > self.p.plazo_detenido_s:
-            return self._fallar(f'Detenido más de {self.p.plazo_detenido_s:.0f} s')
+            self.ancla_progreso = pose
+            self.ancla_xy = pose
+            self.t_progreso_xy = self.ahora
+        distancia = math.hypot(pose.x-self.ancla_progreso.x, pose.y-self.ancla_progreso.y)
+        giro = abs(math.atan2(math.sin(pose.yaw-self.ancla_progreso.yaw),
+                              math.cos(pose.yaw-self.ancla_progreso.yaw)))
+        if distancia >= .05 or giro >= .5:
+            self.t_movimiento = self.ahora
+            self.ancla_progreso = pose
+        if math.hypot(pose.x-self.ancla_xy.x, pose.y-self.ancla_xy.y) >= .05:
+            self.t_progreso_xy = self.ahora
+            self.ancla_xy = pose
+        if (self.ahora-self.t_movimiento > self.p.plazo_detenido_s or
+                self.ahora-self.t_progreso_xy > 2*self.p.plazo_detenido_s):
+            return self._fallar('Sin progreso físico: abandonar intento de navegación')
         return cmd
 
     def paso(self, e):
@@ -507,6 +522,8 @@ class IdaVuelta:
             # efectivo por el espacio en la dirección real del movimiento.
             espacio = self.seguidor.p.espacio_rapido_m
         cmd = self.seguidor.paso(e.ahora, e.pose, espacio)
+        if getattr(self.seguidor, "atascado", False):
+            return self._fallar("Alineación sin convergencia: abandonar intento")
         self.ultima_propuesta=[cmd.vx,cmd.vy,cmd.wz]
         if self.seguidor.llego:
             error = (math.atan2(math.sin(self.meta_yaw-e.pose.yaw),

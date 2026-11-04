@@ -17,8 +17,15 @@ class ParametrosSeguimiento:
     espacio_rapido_m: float
     velocidad_cerca_pared: float
     dt_max_s: float
+    velocidad_angular_min: float = 0.0
+    plazo_alineacion_s: float = 8.0
 
     def __post_init__(self):
+        if not (math.isfinite(self.velocidad_angular_min) and
+                0 <= self.velocidad_angular_min <= self.velocidad_angular_max):
+            raise ValueError("Velocidad angular mínima inválida")
+        if not math.isfinite(self.plazo_alineacion_s) or self.plazo_alineacion_s <= 0:
+            raise ValueError("Plazo de alineación inválido")
         valores = (self.velocidad_max, self.aceleracion_max, self.distancia_mira_m,
                    self.tolerancia_meta_m, self.ganancia_yaw, self.velocidad_angular_max,
                    self.espacio_lento_m, self.espacio_rapido_m, self.velocidad_cerca_pared,
@@ -61,6 +68,8 @@ class Seguidor:
         self.orientaciones = ruta.orientaciones
         self.rumbo_final = getattr(ruta, 'rumbo_final', None)
         self.indice_orientado = 0
+        self.alineando_desde = None
+        self.atascado = False
         self.tramo_orientado = None
         self.puntos = list(ruta.puntos)
         self.yaw_mantener = yaw_mantener
@@ -160,12 +169,21 @@ class Seguidor:
             tolerance=self.p.tolerancia_meta_m if i==len(self.puntos)-1 else min(self.precision_vertice_m,self.p.tolerancia_meta_m)
             self.restante_m=distance+sum(math.dist(a,b) for a,b in zip(self.puntos[i:],self.puntos[i+1:]))
             if distance<=tolerance and abs(error)<=.06:
+                self.alineando_desde=None
                 self.indice_orientado+=1;self.tramo_orientado=None
                 continue
             if abs(error)>.08 or (distance<=tolerance and abs(error)>.06):
                 self.tramo_orientado=None
+                if self.alineando_desde is None:self.alineando_desde=ahora
+                if ahora-self.alineando_desde >= self.p.plazo_alineacion_s:
+                    self.atascado=True
+                    self.detener()
+                    return Comando.cero()
                 w=max(-self.p.velocidad_angular_max,min(self.p.velocidad_angular_max,self.p.ganancia_yaw*error))
+                if abs(w)<self.p.velocidad_angular_min:
+                    w=math.copysign(self.p.velocidad_angular_min,error)
                 return Comando(0.,0.,w)
+            self.alineando_desde=None
             if self.tramo_orientado is None:
                 self.tramo_orientado=Seguidor(replace(self.p,tolerancia_meta_m=tolerance))
                 self.tramo_orientado.reiniciar(Ruta([(pose.x,pose.y),target],distance,distance),self.orientaciones[i])
