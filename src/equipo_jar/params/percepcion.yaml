@@ -6,7 +6,7 @@ percepcion:
     frecuencia_hz: 2.0
     frescura_s: 0.8
     rafaga_s: 2.0
-    tono_rojo_max: 8
+    tono_rojo_max: 10
     saturacion_min: 120
     brillo_min: 45
     pixeles_min: 30

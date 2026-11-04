@@ -44,16 +44,16 @@ nodo_equipo:
   ros__parameters:
     localizacion_activa: true
     scan_topic: /scan
-    frescura_pose_s: 3.0
+    frescura_pose_s: 6.0
     # Recuperación post-LISTA; adquisición inicial y calidad sin cambios.
     recuperacion_activa_post_lista: true
-    espera_recuperacion_activa_s: 3.0
+    espera_recuperacion_activa_s: 1.0
     giro_recuperacion_rad: 0.6108652381980153  # 35°, alterna el sentido
-    max_intentos_recuperacion_activa: 3
+    max_intentos_recuperacion_activa: 6
     recuperacion_std_xy_m: 0.30
     recuperacion_std_yaw_rad: 0.35
     plazo_recuperacion_s: 15.0
-    max_recuperaciones: 2
+    max_recuperaciones: 5
     giro_velocidad_rad_s: 0.75
     giro_objetivo_rad: 0.3490658504
     max_giros: 3
@@ -72,12 +72,12 @@ nodo_equipo:
     concordancia_min_supervision: 0.70  # Sólo tras la primera LISTA
     estabilidad_xy_m: 0.03
     estabilidad_yaw_rad: 0.035
-    frescura_sensores_s: 0.6
+    frescura_sensores_s: 1.0
     tolerancia_mapa_m: 0.10
     min_rayos_validos: 30
     # M2: un hueco breve de datos o de calidad detiene sin gastar una recuperación.
-    plazo_falta_datos_s: 2.0
-    plazo_falla_calidad_s: 1.0
+    plazo_falta_datos_s: 8.0
+    plazo_falla_calidad_s: 3.0
     # Rayos que quedan más de esto antes de la pared esperada no cuentan (obstáculo).
     deficit_obstaculo_m: 0.40
     muestra_rayos: 120
